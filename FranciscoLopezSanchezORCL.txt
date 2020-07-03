@@ -1,0 +1,145 @@
+DROP TABLE TABLA_TIPOVUELO;
+DROP TABLE TABLA_PASAJERO;
+DROP TYPE ANIDADA_PASAJE FORCE;
+DROP TYPE ANIDADA_PERSONAL FORCE;
+DROP TYPE TIPOPASAJE FORCE;
+DROP TYPE TIPOPASAJERO FORCE;
+DROP TYPE TIPOPERSONAL FORCE;
+DROP TYPE TIPOVUELO FORCE;
+
+-- 1
+
+CREATE OR REPLACE TYPE TIPOPASAJERO AS OBJECT(
+    COD NUMBER,
+    NOMBRE VARCHAR2(30),
+    TLF VARCHAR2(10),
+    DIRECCION VARCHAR2(40),
+    PAIS VARCHAR2(15)
+);
+/
+
+-- 2
+
+CREATE OR REPLACE TYPE TIPOPERSONAL AS OBJECT(
+    CODIGO NUMBER,
+    NOMBRE VARCHAR2(20),
+    CATEGORIA VARCHAR2(15),
+    PUESTO VARCHAR2(10)
+);
+/
+
+-- 3
+
+CREATE OR REPLACE TYPE TIPOPASAJE AS OBJECT(
+    PASAJERO REF TIPOPASAJERO,
+    NUMASIENTO NUMBER,
+    CLASE VARCHAR2(10),
+    PVP FLOAT(126)
+);
+/
+
+-- 4
+
+CREATE TYPE ANIDADA_PASAJE AS TABLE OF TIPOPASAJE;
+/
+CREATE TYPE ANIDADA_PERSONAL AS TABLE OF TIPOPERSONAL;
+/
+CREATE OR REPLACE TYPE TIPOVUELO AS OBJECT(
+    IDENTIFICADOR VARCHAR2(10),
+    AEROPUERTO_ORIGEN VARCHAR2(10),
+    AEROPUERTO_DESTINO VARCHAR2(10),
+    TIPO_VUELO VARCHAR2(15),
+    FECHA_VUELO DATE,
+    ANI_PASAJE ANIDADA_PASAJE,
+    ANI_PERSONAL ANIDADA_PERSONAL,
+    MEMBER FUNCTION SUMA RETURN NUMBER,
+    MEMBER FUNCTION NPASACLASE(PAIS VARCHAR2, CLASE VARCHAR2) RETURN NUMBER
+);
+/
+
+CREATE OR REPLACE
+TYPE BODY TIPOVUELO AS
+
+  MEMBER FUNCTION SUMA RETURN NUMBER AS
+  suma NUMBER := 0;
+  pasaje TIPOPASAJE;
+  BEGIN
+    for i in 1 .. ANI_PASAJE.count loop
+        pasaje := ANI_PASAJE(i);
+        suma := suma + pasaje.pvp;
+    end loop;
+    return suma;
+  END SUMA;
+
+  MEMBER FUNCTION NPASACLASE(PAIS VARCHAR2, CLASE VARCHAR2) RETURN NUMBER AS
+  pasaje TIPOPASAJE;
+  pasajero TIPOPASAJERO;
+  contador NUMBER := 0;
+  BEGIN
+    dbms_output.put_line(ANI_PASAJE.count);
+    for i in 1 .. ANI_PASAJE.count loop
+        pasaje := ANI_PASAJE(i);
+        select deref(pasaje.pasajero) into pasajero from dual;
+        if(pasaje.CLASE = CLASE) then
+            if(PASAJERO.PAIS = PAIS) then
+                contador := contador + 1;
+            end if;
+        end if;
+    end loop;
+    return contador;
+    
+  END NPASACLASE;
+
+END;
+/
+
+-- 5
+
+CREATE TABLE TABLA_TIPOVUELO OF TIPOVUELO(
+    IDENTIFICADOR PRIMARY KEY
+)
+NESTED TABLE ANI_PASAJE STORE AS TT_PASAJE
+NESTED TABLE ANI_PERSONAL STORE AS TT_PERSONAL
+;
+/
+
+-- Para insertar los datos no anidados.
+
+CREATE TABLE TABLA_PASAJERO OF TIPOPASAJERO(
+    COD PRIMARY KEY
+);
+INSERT INTO TABLA_PASAJERO
+SELECT * FROM PASAJERO;
+/
+
+declare
+    cursor c1 is select * from tabla_tipovuelo v;
+    acum varchar2(200);
+begin
+    delete from tabla_tipovuelo;
+    
+    insert into tabla_tipovuelo
+    select v.identificador, v.AEROPUERTO_ORIGEN, v.AEROPUERTO_DESTINO, v.TIPO_VUELO,
+    v.FECHA_VUELO, ANIDADA_PASAJE(), ANIDADA_PERSONAL()
+    from vuelo v
+    order by v.identificador;
+    
+    for i in c1 loop
+        -- insertar anidada pasajes
+        insert into table(select ANI_PASAJE from TABLA_TIPOVUELO WHERE identificador = i.identificador)
+        select TIPOPASAJE(REF(pa), p.NUMASIENTO, p.CLASE, p.PVP)
+        from pasaje p join TABLA_pasajero pa
+        on (p.PASAJERO_COD = pa.COD)
+        where p.identificador = i.identificador;
+        
+        insert into table(select ANI_PERSONAL from TABLA_TIPOVUELO WHERE identificador = i.identificador)
+        select TIPOPERSONAL(p.CODIGO, p.NOMBRE, p.CATEGORIA, t.PUESTO)
+        from tabla_tipovuelo v join tripulacion t
+        on (v.IDENTIFICADOR = t.VUELO_IDENTIFICADOR)
+        join personal p
+        on (t.PERSONAL_CODIGO = p.CODIGO)
+        where v.IDENTIFICADOR = i.IDENTIFICADOR;
+    end loop;
+    
+end;
+/
